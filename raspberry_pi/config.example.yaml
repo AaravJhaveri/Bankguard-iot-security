@@ -1,0 +1,61 @@
+backend:
+  host: "192.168.1.100"    # Change to Laptop IP on local network
+  port: 5000
+  secret: "CHANGE_THIS_PI_SECRET"
+  device_id: "bankguard_pi_01"
+  reconnect_delay_s: 5
+
+sensors:
+  dht11:
+    enabled: true
+    pin: "TODO"
+    poll_interval_s: 10
+  mq2:
+    enabled: true
+    adc_channel: 0
+    poll_interval_s: 2
+  pir:
+    enabled: true
+    pin: "TODO"
+  reed_entrance:
+    enabled: true
+    pin: "TODO"
+  reed_vault:
+    enabled: true
+    pin: "TODO"
+  ultrasonic:
+    enabled: true
+    trigger_pin: "TODO"
+    echo_pin: "TODO"
+    poll_interval_s: 1
+  adxl335:
+    enabled: true
+    adc_channel_x: 1
+    adc_channel_y: 2
+    adc_channel_z: 3
+    poll_interval_s: 0.5
+  rfid_rc522:
+    enabled: true
+    poll_interval_s: 0.2
+
+actuators:
+  entrance_servo:
+    enabled: true
+    pin: "TODO"
+    lock_angle: 0
+    unlock_angle: 90
+  vault_servo:
+    enabled: true
+    pin: "TODO"
+    lock_angle: 0
+    unlock_angle: 90
+  buzzer:
+    enabled: true
+    pin: "TODO"
+  status_led_green:
+    enabled: true
+    pin: "TODO"
+  status_led_red:
+    enabled: true
+    pin: "TODO"
+
