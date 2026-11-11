@@ -55,7 +55,7 @@ export default function Navbar() {
               backgroundColor: piConnected ? 'var(--color-normal)' : 'var(--color-critical)',
             }}
           />
-          <span style={styles.piText}>Pi: {piConnected ? 'ONLINE' : 'DISCONNECTED'}</span>
+          <span style={styles.piText}>Pi: {piConnected ? 'CONNECTED' : 'DISCONNECTED'}</span>
         </div>
 
         {/* Alerts Pill */}

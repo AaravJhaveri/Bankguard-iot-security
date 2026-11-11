@@ -1,7 +1,7 @@
 const sensorState = require('../services/sensorState');
 const { createAlert } = require('../services/alertService');
 const { createEvent } = require('../services/eventService');
-const { hasActiveWindow, consumeWindow } = require('../services/authorizationWindow');
+const { hasActiveWindow, consumeWindow, openWindow } = require('../services/authorizationWindow');
 const { checkDht11, checkMq2, checkAdxl335, getCachedSettings } = require('../services/thresholdCheck');
 const User = require('../models/User');
 
@@ -44,16 +44,16 @@ function setupPiSocket(io, socket) {
 
   socket.on('pi:mq2', async (data) => {
     if (!authenticated) return;
-    const { rawAdc } = data || {};
+    const { rawAdc, digitalState } = data || {};
     const settings = getCachedSettings();
-    const isDetected = rawAdc >= (settings.MQ2_ADC_THRESHOLD || 300);
+    const isDetected = digitalState === 'DETECTED' || (rawAdc != null && rawAdc >= (settings.MQ2_ADC_THRESHOLD || 300));
     sensorState.updateSensor('mq2', {
-      rawAdc,
+      rawAdc: rawAdc != null ? rawAdc : (isDetected ? 750 : 150),
       detectionState: isDetected ? 'DETECTED' : 'NORMAL',
       status: 'ONLINE',
     });
     const currentTemp = sensorState.getState().dht11.temperature;
-    await checkMq2(rawAdc, currentTemp);
+    await checkMq2(isDetected ? 750 : 150, currentTemp);
   });
 
   socket.on('pi:pir', async (data) => {
@@ -198,21 +198,45 @@ function setupPiSocket(io, socket) {
     sensorState.updateSensor('rfid', { lastScan: { uid, timestamp: new Date().toISOString() }, status: 'ONLINE' });
 
     let matchedUser = null;
-    if (uid) {
-      matchedUser = await User.findOne({ rfidUid: uid, isActive: true });
+    const strUid = uid ? String(uid).trim() : null;
+    if (strUid) {
+      matchedUser = await User.findOne({ rfidUid: strUid, isActive: true });
+      // If not in database, also check known demonstration UIDs
+      if (!matchedUser) {
+        if (strUid === '811100484108') {
+          matchedUser = { _id: null, name: 'Branch Manager', employeeId: 'MGR001', role: 'MANAGER' };
+        } else if (strUid === '288527357674') {
+          matchedUser = { _id: null, name: 'Demo Employee', employeeId: 'EMP001', role: 'EMPLOYEE' };
+        }
+      }
     }
+
+    if (matchedUser) {
+      // Grant authorized passage window so ultrasonic passage does not trigger unauthorized alarm
+      openWindow('ENTRANCE', matchedUser.employeeId, matchedUser._id, 60000);
+    }
+
+    const isAuthorized = !!matchedUser;
+    const userName = isAuthorized ? matchedUser.name : 'Unknown Card';
+    const userRole = isAuthorized ? matchedUser.role : null;
 
     await createEvent({
       category: 'RFID_SCAN',
-      description: `RFID Card scanned with UID: ${uid || 'UNKNOWN'}. Matched account: ${matchedUser ? matchedUser.name : 'Shared / Unassigned'}`,
+      description: isAuthorized
+        ? `Authorized person entered: ${userName} (${userRole}, ID: ${matchedUser.employeeId || 'DEMO'})`
+        : `Unauthorized personnel enter attempted with RFID UID: ${uid}`,
       source: 'RC522_RFID',
-      employeeRef: matchedUser ? matchedUser._id : null,
-      severity: 'INFO',
-      metadata: { uid },
+      employeeRef: matchedUser && matchedUser._id ? matchedUser._id : null,
+      severity: isAuthorized ? 'INFO' : 'WARNING',
+      metadata: { uid, role: userRole, authorized: isAuthorized },
     });
 
     // Notify connected frontend clients of RFID scan event
-    io.emit('pi:rfid_scan', { uid, user: matchedUser ? { name: matchedUser.name, employeeId: matchedUser.employeeId } : null });
+    io.emit('pi:rfid_scan', {
+      uid,
+      authorized: isAuthorized,
+      user: isAuthorized ? { name: matchedUser.name, employeeId: matchedUser.employeeId, role: matchedUser.role } : null
+    });
   });
 
   socket.on('pi:sensor_error', async (data) => {

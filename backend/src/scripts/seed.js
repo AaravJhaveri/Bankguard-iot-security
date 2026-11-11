@@ -44,11 +44,14 @@ async function seed() {
       email: 'manager@bankguard.local',
       role: 'MANAGER',
       passwordHash: defaultPasswordHash,
+      rfidUid: '811100484108',
       isActive: true,
     });
-    console.log('✓ Manager account created: MGR001');
+    console.log('✓ Manager account created: MGR001 (UID: 811100484108)');
   } else {
-    console.log('Manager MGR001 already exists.');
+    existingManager.rfidUid = '811100484108';
+    await existingManager.save();
+    console.log('Manager MGR001 updated with RFID UID: 811100484108');
   }
 
   const existingEmployee = await User.findOne({ employeeId: 'EMP001' });
@@ -59,10 +62,15 @@ async function seed() {
       email: 'employee@bankguard.local',
       role: 'EMPLOYEE',
       passwordHash: defaultPasswordHash,
+      rfidUid: '288527357674',
       isActive: true,
     });
-    console.log('✓ Employee account created: EMP001');
+    console.log('✓ Employee account created: EMP001 (UID: 288527357674)');
   } else {
+    existingEmployee.rfidUid = '288527357674';
+    await existingEmployee.save();
+    console.log('Employee EMP001 updated with RFID UID: 288527357674');
+  }
     console.log('Employee EMP001 already exists.');
   }
 

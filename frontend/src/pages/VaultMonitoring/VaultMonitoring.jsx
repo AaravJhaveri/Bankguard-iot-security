@@ -53,45 +53,6 @@ export default function VaultMonitoring() {
       {/* Sensor Cards Row */}
       <div style={styles.grid}>
         <SensorCard
-          title="Vault Reed Switch (Door)"
-          value={sensorState.vaultReed.state}
-          status={sensorState.vaultReed.status}
-          lastUpdate={sensorState.vaultReed.lastUpdate}
-          icon="🔒"
-          warning={sensorState.vaultReed.state === 'OPEN'}
-        />
-
-        <SensorCard
-          title="DHT11 Temperature"
-          value={sensorState.dht11.temperature}
-          unit="°C"
-          status={sensorState.dht11.status}
-          lastUpdate={sensorState.dht11.lastUpdate}
-          icon="🌡️"
-          warning={sensorState.dht11.temperature > 35}
-        />
-
-        <SensorCard
-          title="DHT11 Relative Humidity"
-          value={sensorState.dht11.humidity}
-          unit="%RH"
-          status={sensorState.dht11.status}
-          lastUpdate={sensorState.dht11.lastUpdate}
-          icon="💧"
-          warning={sensorState.dht11.humidity > 80}
-        />
-
-        <SensorCard
-          title="MQ-2 Gas / Smoke ADC"
-          value={sensorState.mq2.rawAdc}
-          status={sensorState.mq2.status}
-          lastUpdate={sensorState.mq2.lastUpdate}
-          icon="💨"
-          subValue={`State: ${sensorState.mq2.detectionState}`}
-          warning={sensorState.mq2.detectionState === 'DETECTED'}
-        />
-
-        <SensorCard
           title="Vault PIR Motion Sensor"
           value={sensorState.pir.state}
           status={sensorState.pir.status}
@@ -120,9 +81,6 @@ export default function VaultMonitoring() {
 
         <div style={styles.vcBody}>
           <div style={styles.vcInfo}>
-            <div>
-              Physical Door Contact: <StatusIndicator state={sensorState.vaultReed.state} />
-            </div>
             <div>
               Actuator Command State: <strong>{sensorState.vaultServo.lastCommand || 'LOCKED'}</strong> ({sensorState.vaultServo.commandResult})
             </div>

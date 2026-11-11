@@ -10,11 +10,7 @@ export default function Sidebar() {
     { path: '/bank-branch', label: 'Bank Branch', icon: '🏢' },
     { path: '/vault', label: 'Vault Monitoring', icon: '🔒' },
     ...(isManager ? [{ path: '/employees', label: 'Employee Mgmt', icon: '👥' }] : []),
-    { path: '/access-control', label: 'Access Control', icon: '🔑' },
-    { path: '/alerts', label: 'Alerts & Actions', icon: '🚨' },
     { path: '/event-logs', label: 'Event Logs', icon: '📜' },
-    { path: '/sensor-health', label: 'Sensor Health', icon: '🩺' },
-    ...(isManager ? [{ path: '/settings', label: 'Settings', icon: '⚙️' }] : []),
   ];
 
   return (

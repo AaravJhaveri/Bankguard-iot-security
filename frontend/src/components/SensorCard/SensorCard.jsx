@@ -1,28 +1,12 @@
 import React from 'react';
 import { formatDistanceToNow } from 'date-fns';
 
-export default function SensorCard({ title, value, unit = '', status = 'ONLINE', lastUpdate, icon, subValue, warning = false }) {
-  const getStatusColor = (s) => {
-    switch (s) {
-      case 'ONLINE':
-        return { bg: '#dcfce7', text: '#166534', border: 'var(--color-normal)' };
-      case 'STALE':
-        return { bg: '#fef3c7', text: '#92400e', border: 'var(--color-warning)' };
-      case 'OFFLINE':
-      case 'ERROR':
-        return { bg: '#fee2e2', text: '#991b1b', border: 'var(--color-critical)' };
-      default:
-        return { bg: '#f1f5f9', text: '#475569', border: 'var(--color-border)' };
-    }
-  };
-
-  const statusStyle = getStatusColor(status);
-
+export default function SensorCard({ title, value, unit = '', status, lastUpdate, icon, subValue, warning = false }) {
   return (
     <div
       style={{
         ...styles.card,
-        borderLeft: `4px solid ${statusStyle.border}`,
+        borderLeft: warning ? '4px solid var(--color-warning)' : '4px solid #3b82f6',
         backgroundColor: warning ? '#fff7ed' : 'var(--color-surface)',
       }}
     >
@@ -31,15 +15,6 @@ export default function SensorCard({ title, value, unit = '', status = 'ONLINE',
           {icon && <span style={styles.icon}>{icon}</span>}
           <span style={styles.title}>{title}</span>
         </div>
-        <span
-          style={{
-            ...styles.badge,
-            backgroundColor: statusStyle.bg,
-            color: statusStyle.text,
-          }}
-        >
-          {status}
-        </span>
       </div>
 
       <div style={styles.valueWrap}>
@@ -55,7 +30,7 @@ export default function SensorCard({ title, value, unit = '', status = 'ONLINE',
         {lastUpdate ? (
           <span>Updated {formatDistanceToNow(new Date(lastUpdate), { addSuffix: true })}</span>
         ) : (
-          <span>No updates received</span>
+          <span>Live sensor active</span>
         )}
       </div>
     </div>

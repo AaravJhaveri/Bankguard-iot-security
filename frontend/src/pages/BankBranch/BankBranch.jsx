@@ -61,12 +61,31 @@ export default function BankBranch() {
       {/* Main Sensor Cards Row */}
       <div style={styles.grid}>
         <SensorCard
-          title="Main Entrance Reed Switch"
-          value={sensorState.entranceReed.state}
-          status={sensorState.entranceReed.status}
-          lastUpdate={sensorState.entranceReed.lastUpdate}
-          icon="🚪"
-          warning={sensorState.entranceReed.state === 'OPEN'}
+          title="DHT11 Temperature"
+          value={sensorState.dht11.temperature}
+          unit="°C"
+          status={sensorState.dht11.status}
+          lastUpdate={sensorState.dht11.lastUpdate}
+          icon="🌡️"
+          warning={sensorState.dht11.temperature > 35}
+        />
+
+        <SensorCard
+          title="DHT11 Humidity"
+          value={sensorState.dht11.humidity}
+          unit="%RH"
+          status={sensorState.dht11.status}
+          lastUpdate={sensorState.dht11.lastUpdate}
+          icon="💧"
+          warning={sensorState.dht11.humidity > 80}
+        />
+
+        <SensorCard
+          title="MQ-2 Smoke / Gas Sensor"
+          value={sensorState.mq2.detectionState}
+          lastUpdate={sensorState.mq2.lastUpdate}
+          icon="💨"
+          warning={sensorState.mq2.detectionState === 'DETECTED'}
         />
 
         <SensorCard
@@ -96,9 +115,6 @@ export default function BankBranch() {
           </div>
 
           <div style={styles.controlStatus}>
-            <div style={{ fontSize: '12px', color: 'var(--color-text-muted)' }}>
-              Physical Reed Feedback: <StatusIndicator state={sensorState.entranceReed.state} />
-            </div>
             <div style={{ fontSize: '11px', color: 'var(--color-text-muted)', marginTop: '4px' }}>
               Last command: {sensorState.entranceServo.lastCommand || 'None'} ({sensorState.entranceServo.commandResult})
             </div>

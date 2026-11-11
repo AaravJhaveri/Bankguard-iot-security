@@ -57,7 +57,7 @@ export default function Overview() {
           <div>
             <div style={{ ...styles.statusLabel, color: sysStatus.color }}>{sysStatus.label}</div>
             <div style={styles.statusSub}>
-              Monitoring Mode: <strong>{monitoringMode}</strong> | Pi Controller: <strong>{piConnected ? 'ONLINE' : 'OFFLINE'}</strong>
+              Monitoring Mode: <strong>{monitoringMode}</strong> | Pi Controller: <strong>{piConnected ? 'CONNECTED' : 'DISCONNECTED'}</strong>
             </div>
           </div>
         </div>
@@ -127,10 +127,8 @@ export default function Overview() {
         <SensorCard
           title="Smoke & Combustible Gas"
           value={sensorState.mq2.detectionState}
-          status={sensorState.mq2.status}
           lastUpdate={sensorState.mq2.lastUpdate}
           icon="💨"
-          subValue={sensorState.mq2.rawAdc !== null ? `Raw ADC: ${sensorState.mq2.rawAdc}` : 'Awaiting reading'}
           warning={sensorState.mq2.detectionState === 'DETECTED'}
         />
 
