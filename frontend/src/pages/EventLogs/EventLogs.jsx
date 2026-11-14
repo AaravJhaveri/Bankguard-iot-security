@@ -94,9 +94,8 @@ export default function EventLogs() {
             style={styles.select}
           >
             <option value="">All Categories</option>
-            <option value="DOOR_EVENT">DOOR_EVENT</option>
+            <option value="RFID_SCAN">RFID SCAN</option>
             <option value="ACCESS_ATTEMPT">ACCESS_ATTEMPT</option>
-            <option value="VAULT_ACCESS">VAULT_ACCESS</option>
             <option value="MOTION">MOTION</option>
             <option value="SERVO_COMMAND">SERVO_COMMAND</option>
             <option value="ENVIRONMENTAL">ENVIRONMENTAL</option>

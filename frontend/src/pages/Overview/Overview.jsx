@@ -88,20 +88,20 @@ export default function Overview() {
 
         <SensorCard
           title="Main Entrance Door"
-          value={sensorState.entranceReed.state}
-          status={sensorState.entranceReed.status}
-          lastUpdate={sensorState.entranceReed.lastUpdate}
+          value={sensorState.entranceServo.state || sensorState.entranceServo.lastCommand || 'LOCKED'}
+          lastUpdate={sensorState.entranceServo.lastUpdate}
           icon="🚪"
-          warning={sensorState.entranceReed.state === 'OPEN'}
+          subValue="RFID authorization only"
+          warning={(sensorState.entranceServo.state || sensorState.entranceServo.lastCommand) === 'UNLOCKED'}
         />
 
         <SensorCard
           title="Vault Security Door"
-          value={sensorState.vaultReed.state}
-          status={sensorState.vaultReed.status}
-          lastUpdate={sensorState.vaultReed.lastUpdate}
+          value={sensorState.vaultServo.state || sensorState.vaultServo.lastCommand || 'LOCKED'}
+          lastUpdate={sensorState.vaultServo.lastUpdate}
           icon="🔒"
-          warning={sensorState.vaultReed.state === 'OPEN'}
+          subValue="Website authorization only"
+          warning={(sensorState.vaultServo.state || sensorState.vaultServo.lastCommand) === 'UNLOCKED'}
         />
 
         <SensorCard
@@ -139,14 +139,6 @@ export default function Overview() {
           icon="🚨"
           subValue="Pending acknowledge/resolve"
           warning={activeAlerts.length > 0}
-        />
-
-        <SensorCard
-          title="Raspberry Pi Controller"
-          value={piConnected ? 'CONNECTED' : 'DISCONNECTED'}
-          status={piConnected ? 'ONLINE' : 'OFFLINE'}
-          icon="🍓"
-          subValue="Local Ethernet connection"
         />
       </div>
 

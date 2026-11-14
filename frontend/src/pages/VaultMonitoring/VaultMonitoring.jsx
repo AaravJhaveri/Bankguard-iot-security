@@ -4,7 +4,6 @@ import { useAuth } from '../../context/AuthContext';
 import SensorCard from '../../components/SensorCard/SensorCard';
 import StatusIndicator from '../../components/StatusIndicator/StatusIndicator';
 import ConfirmModal from '../../components/ConfirmModal/ConfirmModal';
-import LiveChart from '../../components/LiveChart/LiveChart';
 import api from '../../api/client';
 import toast from 'react-hot-toast';
 
@@ -42,7 +41,7 @@ export default function VaultMonitoring() {
             <div>
               <div style={styles.fireTitle}>CRITICAL: POSSIBLE FIRE CONDITION DETECTED IN VAULT</div>
               <div style={styles.fireSub}>
-                Combined anomalous threshold exceeded: High Temperature ({sensorState.dht11.temperature}°C) & Smoke ADC ({sensorState.mq2.rawAdc}).
+                Combined anomalous threshold exceeded: High Temperature ({sensorState.dht11.temperature}°C) & Smoke ({sensorState.mq2.detectionState}).
                 Note: This system is an educational prototype and not a certified fire alarm.
               </div>
             </div>
@@ -82,10 +81,10 @@ export default function VaultMonitoring() {
         <div style={styles.vcBody}>
           <div style={styles.vcInfo}>
             <div>
-              Actuator Command State: <strong>{sensorState.vaultServo.lastCommand || 'LOCKED'}</strong> ({sensorState.vaultServo.commandResult})
+              Actuator Command State: <strong>{sensorState.vaultServo.state || sensorState.vaultServo.lastCommand || 'LOCKED'}</strong>
             </div>
             <div style={styles.vcNotice}>
-              ⚠️ Unlocking sends a PWM signal to the servo mechanism and logs a high-severity security audit event. Only certified branch managers may authorize vault disengagement.
+              ⚠️ Unlocking sends a PWM signal to the servo mechanism and logs a high-severity security audit event. Only certified branch managers may authorize vault disengagement from the website.
             </div>
           </div>
 
@@ -110,28 +109,6 @@ export default function VaultMonitoring() {
             </div>
           )}
         </div>
-      </div>
-
-      {/* Live Environmental Charts */}
-      <div style={styles.chartsGrid}>
-        <LiveChart
-          title="Vault Temperature Stream"
-          data={[]}
-          dataKey="temperature"
-          unit="°C"
-          color="#ea580c"
-          minVal={15}
-          maxVal={60}
-        />
-        <LiveChart
-          title="Vault Relative Humidity Stream"
-          data={[]}
-          dataKey="humidity"
-          unit="%RH"
-          color="#2563eb"
-          minVal={20}
-          maxVal={100}
-        />
       </div>
 
       <ConfirmModal

@@ -61,13 +61,17 @@ const state = {
     lastUpdate: null,
   },
   entranceServo: {
-    lastCommand: null, // LOCK | UNLOCK
-    commandResult: 'UNKNOWN', // SENT | FAILED | SUCCESS | UNKNOWN
+    state: 'LOCKED',
+    lastCommand: 'LOCKED',
+    commandResult: 'SUCCESS',
+    status: 'ONLINE',
     lastUpdate: null,
   },
   vaultServo: {
-    lastCommand: null,
-    commandResult: 'UNKNOWN',
+    state: 'LOCKED',
+    lastCommand: 'LOCKED',
+    commandResult: 'SUCCESS',
+    status: 'ONLINE',
     lastUpdate: null,
   },
 };

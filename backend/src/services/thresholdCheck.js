@@ -40,8 +40,8 @@ async function checkDht11(temperature, humidity) {
     if (temperature >= cachedSettings.DHT11_TEMP_CRITICAL) {
       await createAlert({
         type: 'TEMP_HIGH_CRITICAL',
-        severity: 'HIGH',
-        description: `Critical temperature reached in vault: ${temperature}°C`,
+        severity: 'WARNING',
+        description: `Elevated temperature reached in bank/vault: ${temperature}°C`,
         source: 'DHT11',
         relatedReadings: { temperature, criticalThreshold: cachedSettings.DHT11_TEMP_CRITICAL },
       });
@@ -49,7 +49,7 @@ async function checkDht11(temperature, humidity) {
       await createAlert({
         type: 'TEMP_HIGH_WARNING',
         severity: 'WARNING',
-        description: `Elevated temperature detected in vault: ${temperature}°C`,
+        description: `Elevated temperature detected in bank/vault: ${temperature}°C`,
         source: 'DHT11',
         relatedReadings: { temperature, warnThreshold: cachedSettings.DHT11_TEMP_WARN },
       });
@@ -60,7 +60,7 @@ async function checkDht11(temperature, humidity) {
     await createAlert({
       type: 'HUMIDITY_HIGH',
       severity: 'WARNING',
-      description: `High relative humidity in vault: ${humidity}%RH`,
+      description: `High relative humidity in bank/vault: ${humidity}%RH`,
       source: 'DHT11',
       relatedReadings: { humidity, threshold: cachedSettings.DHT11_HUMIDITY_WARN },
     });
@@ -71,8 +71,8 @@ async function checkMq2(rawAdc, currentTemp) {
   if (rawAdc != null && rawAdc >= cachedSettings.MQ2_ADC_THRESHOLD) {
     await createAlert({
       type: 'SMOKE_GAS_DETECTED',
-      severity: 'HIGH',
-      description: `Smoke or combustible gas detected by MQ-2: ADC ${rawAdc}`,
+      severity: 'WARNING',
+      description: `Smoke or combustible gas detected by MQ-2 sensor.`,
       source: 'MQ-2',
       relatedReadings: { rawAdc, threshold: cachedSettings.MQ2_ADC_THRESHOLD },
     });
@@ -84,7 +84,7 @@ async function checkMq2(rawAdc, currentTemp) {
           await createAlert({
             type: 'POSSIBLE_FIRE',
             severity: 'CRITICAL',
-            description: `CRITICAL: POSSIBLE FIRE CONDITION DETECTED IN VAULT (Temp ${currentTemp}°C, Smoke ADC ${rawAdc})`,
+            description: `CRITICAL: POSSIBLE FIRE CONDITION DETECTED IN VAULT (Temp ${currentTemp}°C, Smoke Active)`,
             source: 'SYSTEM_FIRE_LOGIC',
             relatedReadings: { temperature: currentTemp, smokeAdc: rawAdc },
           });
@@ -109,9 +109,9 @@ async function checkAdxl335(x, y, z, baseline = { x: 0, y: 0, z: 1 }) {
   if (delta >= cachedSettings.ADXL335_TAMPER_DELTA) {
     await createAlert({
       type: 'VAULT_TAMPER_SUSPECTED',
-      severity: 'HIGH',
-      description: `Vault physical tamper or vibration suspected: Delta ${delta.toFixed(2)}g`,
-      source: 'ADXL335',
+      severity: 'CRITICAL',
+      description: `CRITICAL: Vault physical tamper or vibration detected: Delta ${delta.toFixed(2)}g`,
+      source: 'ADXL345',
       relatedReadings: { x, y, z, baseline, delta },
     });
   }

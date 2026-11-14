@@ -1,24 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { useSensor } from '../../context/SensorContext';
-import { useAuth } from '../../context/AuthContext';
 import SensorCard from '../../components/SensorCard/SensorCard';
 import StatusIndicator from '../../components/StatusIndicator/StatusIndicator';
-import ConfirmModal from '../../components/ConfirmModal/ConfirmModal';
 import api from '../../api/client';
-import toast from 'react-hot-toast';
 
 export default function BankBranch() {
   const { sensorState } = useSensor();
-  const { isManager } = useAuth();
 
   const [doorEvents, setDoorEvents] = useState([]);
   const [accessLogs, setAccessLogs] = useState([]);
-  const [modalAction, setModalAction] = useState(null); // 'LOCK' | 'UNLOCK' | null
 
   useEffect(() => {
-    // Fetch last door transitions
+    // Fetch last RFID scans and entrance activity
     api
-      .get('/events?category=DOOR_EVENT&source=ENTRANCE_REED&limit=10')
+      .get('/events?category=RFID_SCAN&limit=10')
       .then((res) => setDoorEvents(res.data.data))
       .catch(() => {});
 
@@ -29,31 +24,15 @@ export default function BankBranch() {
       .catch(() => {});
   }, []);
 
-  const handleServoCommand = async (cmd) => {
-    try {
-      if (cmd === 'UNLOCK') {
-        await api.post('/actuators/entrance/unlock');
-        toast.success('Entrance unlock command transmitted to Pi.');
-      } else {
-        await api.post('/actuators/entrance/lock');
-        toast.success('Entrance lock command transmitted to Pi.');
-      }
-    } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed to execute entrance command.');
-    } finally {
-      setModalAction(null);
-    }
-  };
-
   return (
     <div style={styles.container}>
-      {/* Notice Banner regarding RFID limitation */}
+      {/* Notice Banner regarding RFID authorization */}
       <div style={styles.disclaimerBanner}>
         <span style={{ fontSize: '20px' }}>ℹ️</span>
         <div>
-          <div style={styles.disclaimerTitle}>RFID Access & Identity Verification Protocol</div>
+          <div style={styles.disclaimerTitle}>Branch Access Control Protocol</div>
           <div style={styles.disclaimerText}>
-            Because physical cards in this test deployment share a common demonstration UID, the RFID reader detects card presence to prompt credentials. Final identification is always confirmed via individual account credentials on the security console.
+            Main entrance door operates strictly via RFID badge authorization. Upon presenting an authorized card to the RC522 scanner, the entrance door unlocks for 5 seconds and automatically re-locks.
           </div>
         </div>
       </div>
@@ -108,56 +87,33 @@ export default function BankBranch() {
           subValue="Branch entrance checkpoint"
         />
 
-        <div style={styles.controlCard}>
-          <div style={styles.controlHeader}>
-            <span style={styles.controlTitle}>ENTRANCE SERVO ACTUATOR</span>
-            <span style={styles.badge}>{sensorState.entranceServo.lastCommand || 'IDLE'}</span>
-          </div>
-
-          <div style={styles.controlStatus}>
-            <div style={{ fontSize: '11px', color: 'var(--color-text-muted)', marginTop: '4px' }}>
-              Last command: {sensorState.entranceServo.lastCommand || 'None'} ({sensorState.entranceServo.commandResult})
-            </div>
-          </div>
-
-          {isManager ? (
-            <div style={styles.buttonGroup}>
-              <button
-                onClick={() => setModalAction('UNLOCK')}
-                style={{ ...styles.btn, backgroundColor: 'var(--color-primary-light)' }}
-              >
-                Unlock Door
-              </button>
-              <button
-                onClick={() => setModalAction('LOCK')}
-                style={{ ...styles.btn, backgroundColor: '#475569' }}
-              >
-                Lock Door
-              </button>
-            </div>
-          ) : (
-            <div style={styles.restrictedNote}>Actuator commands restricted to Branch Managers.</div>
-          )}
-        </div>
+        <SensorCard
+          title="Main Entrance Door"
+          value={sensorState.entranceServo.state || sensorState.entranceServo.lastCommand || 'LOCKED'}
+          lastUpdate={sensorState.entranceServo.lastUpdate}
+          icon="🚪"
+          subValue="RFID Authorization Only (Auto-locks in 5s)"
+          warning={(sensorState.entranceServo.state || sensorState.entranceServo.lastCommand) === 'UNLOCKED'}
+        />
       </div>
 
       {/* Tables Section */}
       <div style={styles.tablesRow}>
         {/* Door Transitions */}
         <div style={styles.tablePanel}>
-          <div style={styles.panelTitle}>Recent Entrance Door State Transitions</div>
+          <div style={styles.panelTitle}>Recent RFID Door Access Events</div>
           <table style={styles.table}>
             <thead>
               <tr>
                 <th style={styles.th}>Timestamp (IST)</th>
-                <th style={styles.th}>State</th>
-                <th style={styles.th}>Description</th>
+                <th style={styles.th}>Gate Status</th>
+                <th style={styles.th}>Event Summary</th>
               </tr>
             </thead>
             <tbody>
               {doorEvents.length === 0 ? (
                 <tr>
-                  <td colSpan={3} style={styles.emptyTd}>No recorded door events yet.</td>
+                  <td colSpan={3} style={styles.emptyTd}>No recorded RFID access events yet.</td>
                 </tr>
               ) : (
                 doorEvents.map((e, idx) => (
@@ -201,15 +157,6 @@ export default function BankBranch() {
           </table>
         </div>
       </div>
-
-      <ConfirmModal
-        isOpen={!!modalAction}
-        title={`Confirm Entrance ${modalAction}`}
-        message={`Are you sure you want to execute an ${modalAction} command on the main entrance servo?`}
-        onConfirm={() => handleServoCommand(modalAction)}
-        onCancel={() => setModalAction(null)}
-        danger={modalAction === 'UNLOCK'}
-      />
     </div>
   );
 }

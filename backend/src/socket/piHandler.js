@@ -52,6 +52,22 @@ function setupPiSocket(io, socket) {
       detectionState: isDetected ? 'DETECTED' : 'NORMAL',
       status: 'ONLINE',
     });
+
+    if (isDetected) {
+      await createAlert({
+        type: 'SMOKE_GAS_DETECTED',
+        severity: 'WARNING', // Warning responsible for MQ2
+        description: 'Smoke or combustible gas detected by MQ-2 sensor.',
+        source: 'MQ-2',
+      });
+      await createEvent({
+        category: 'ENVIRONMENTAL',
+        description: 'Smoke or combustible gas detected by MQ-2 sensor.',
+        source: 'MQ-2',
+        severity: 'WARNING', // Warning responsible for MQ2
+      });
+    }
+
     const currentTemp = sensorState.getState().dht11.temperature;
     await checkMq2(isDetected ? 750 : 150, currentTemp);
   });
@@ -63,21 +79,21 @@ function setupPiSocket(io, socket) {
 
     if (state === 'MOTION_DETECTED') {
       const currentState = sensorState.getState();
-      const isVaultClosed = currentState.vaultReed.state === 'CLOSED';
+      const isVaultLocked = (currentState.vaultServo.state || currentState.vaultServo.lastCommand) !== 'UNLOCKED';
       const hasWindow = hasActiveWindow('VAULT');
 
-      if (isVaultClosed && !hasWindow) {
+      if (isVaultLocked && !hasWindow) {
         await createAlert({
           type: 'VAULT_PIR_MOTION',
-          severity: 'HIGH',
+          severity: 'HIGH', // HIGH responsible for PIR
           description: 'Motion detected inside vault while vault is secured and unauthorized.',
           source: 'PIR',
         });
         await createEvent({
           category: 'MOTION',
-          description: 'PIR Motion detected inside closed vault.',
+          description: 'PIR Motion detected inside secured vault.',
           source: 'PIR',
-          severity: 'HIGH',
+          severity: 'HIGH', // HIGH responsible for PIR
         });
       }
     }
@@ -85,23 +101,64 @@ function setupPiSocket(io, socket) {
 
   socket.on('pi:adxl335', async (data) => {
     if (!authenticated) return;
-    const { x, y, z } = data || {};
+    const { x, y, z, movementState } = data || {};
     const baseline = sensorState.getState().adxl335.baseline || { x: 0, y: 0, z: 1 };
     const settings = getCachedSettings();
     const delta = Math.sqrt(
       Math.pow((x || 0) - baseline.x, 2) + Math.pow((y || 0) - baseline.y, 2) + Math.pow((z || 0) - baseline.z, 2)
     );
-    const isTamper = delta >= (settings.ADXL335_TAMPER_DELTA || 0.3);
+    const isTamper = movementState === 'POSSIBLE_TAMPERING' || delta >= (settings.ADXL335_TAMPER_DELTA || 0.15);
 
     sensorState.updateSensor('adxl335', {
       x,
       y,
       z,
-      movementState: isTamper ? 'POSSIBLE_TAMPERING' : delta > 0.1 ? 'MOVEMENT_DETECTED' : 'STABLE',
+      movementState: isTamper ? 'POSSIBLE_TAMPERING' : 'STABLE',
       status: 'ONLINE',
     });
 
+    if (isTamper) {
+      await createAlert({
+        type: 'VAULT_TAMPER_SUSPECTED',
+        severity: 'CRITICAL', // Critical responsible for ADXL
+        description: `CRITICAL: Vault physical vibration or tampering detected!`,
+        source: 'ADXL345',
+        relatedReadings: { x, y, z },
+      });
+      await createEvent({
+        category: 'MOTION',
+        description: 'CRITICAL: ADXL accelerometer detected vault movement / vibration tampering!',
+        source: 'ADXL345',
+        severity: 'CRITICAL', // Critical responsible for ADXL
+        metadata: { x, y, z },
+      });
+    }
+
     await checkAdxl335(x, y, z, baseline);
+  });
+
+  socket.on('pi:entrance_servo_state', async (data) => {
+    if (!authenticated) return;
+    const { state } = data || {};
+    const servoState = state === 'UNLOCKED' ? 'UNLOCKED' : 'LOCKED';
+    sensorState.updateSensor('entranceServo', {
+      state: servoState,
+      lastCommand: servoState,
+      commandResult: 'SUCCESS',
+      status: 'ONLINE',
+    });
+  });
+
+  socket.on('pi:vault_servo_state', async (data) => {
+    if (!authenticated) return;
+    const { state } = data || {};
+    const servoState = state === 'UNLOCKED' ? 'UNLOCKED' : 'LOCKED';
+    sensorState.updateSensor('vaultServo', {
+      state: servoState,
+      lastCommand: servoState,
+      commandResult: 'SUCCESS',
+      status: 'ONLINE',
+    });
   });
 
   socket.on('pi:reed_entrance', async (data) => {
@@ -223,12 +280,12 @@ function setupPiSocket(io, socket) {
     await createEvent({
       category: 'RFID_SCAN',
       description: isAuthorized
-        ? `Authorized person entered: ${userName} (${userRole}, ID: ${matchedUser.employeeId || 'DEMO'})`
-        : `Unauthorized personnel enter attempted with RFID UID: ${uid}`,
+        ? `Authorized card scan (UID: ${uid}) [${userName} - ${userRole}] - Branch Gate: OPEN, Vault Gate: CLOSED`
+        : `Unauthorized card scan (UID: ${uid}) - Branch Gate: CLOSED, Vault Gate: CLOSED`,
       source: 'RC522_RFID',
       employeeRef: matchedUser && matchedUser._id ? matchedUser._id : null,
       severity: isAuthorized ? 'INFO' : 'WARNING',
-      metadata: { uid, role: userRole, authorized: isAuthorized },
+      metadata: { uid, role: userRole, authorized: isAuthorized, branchGate: isAuthorized ? 'OPEN' : 'CLOSED', vaultGate: 'CLOSED' },
     });
 
     // Notify connected frontend clients of RFID scan event

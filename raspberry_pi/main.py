@@ -1,92 +1,105 @@
 """
-BankGuard - Raspberry Pi Hardware Controller & Web Bridge
-Integrated with BankGuard Backend via WebSockets (Socket.IO)
+BankGuard - Combined Raspberry Pi Controller
+Components:
+- RC522 RFID
+- ADXL345 accelerometer (I2C)
+- DHT11 temperature/humidity
+- HC-SR04 ultrasonic sensor
+- PIR motion sensor
+- MQ-2 smoke/gas sensor (digital DO output only)
+- Two servo motors
+
+RFID authorization opens branch gate for 5 seconds.
+Vault gate opens only through website authorization.
 """
 
 import time
 import math
 import struct
-import os
-import sys
 import logging
 import threading
+
 import RPi.GPIO as GPIO
 import socketio
-
 import board
 import adafruit_dht
 import smbus
 from mfrc522 import SimpleMFRC522
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
-logger = logging.getLogger("BankGuard-Pi")
 
-# ==================================================
+# =========================================================
 # 1. CONFIGURATION
-# ==================================================
+# =========================================================
 
-BACKEND_HOST = "10.1.69.226"   # Laptop IP on local network
+BACKEND_HOST = "10.1.104.58"   # Change to your laptop/backend IP if needed
 BACKEND_PORT = 5000
 BACKEND_SECRET = "bankguard_pi_secret_token_12345"
 DEVICE_ID = "bankguard_pi_01"
 
-BANK_AUTHORIZED_UIDS = {
-    "288527357674"
+AUTHORIZED_UIDS = {
+    "811100484108",   # Manager card
+    "288527357674"    # Employee card
 }
-
-MANAGER_UIDS = {
-    "811100484108"
-}
-
-MQ2_ALARM_LEVEL = 0
-ULTRASONIC_ALERT_DISTANCE = 30.0
-ACCEL_MOVEMENT_THRESHOLD = 0.35
-
-BANK_LOCK_POSITION = 2.5
-BANK_UNLOCK_POSITION = 7.5
-
-VAULT_LOCK_POSITION = 2.5
-VAULT_UNLOCK_POSITION = 7.5
 
 AUTO_LOCK_SECONDS = 5
 
-# ==================================================
-# 2. GPIO PIN CONFIGURATION
-# ==================================================
+# Servo positions: adjust carefully for your particular servo/mechanism.
+BANK_LOCK_POSITION = 2.5
+BANK_UNLOCK_POSITION = 7.5
+VAULT_LOCK_POSITION = 2.5
+VAULT_UNLOCK_POSITION = 7.5
 
+ADXL_ADDRESS = 0x53
+ACCEL_MOVEMENT_THRESHOLD = 0.15  # Low threshold for vibration testing
+
+# MQ-2 digital output (DO). Existing BankGuard mapping uses BCM GPIO14.
+MQ2_PIN = 14
+MQ2_ALARM_LEVEL = GPIO.LOW  # Common LM393 modules pull DO LOW when threshold is crossed.
+
+
+# =========================================================
+# 2. GPIO PIN CONFIGURATION (BCM numbering)
+# =========================================================
+
+# HC-SR04
 TRIG = 23
 ECHO = 24
 
-PIR = 12
-MQ2 = 14
+# PIR motion sensor
+PIR_PIN = 12
+PIR_WARMUP_SECONDS = 30
 
+# MQ-2 digital output only (DO)
+# GPIO14 is the existing project assignment.
+
+# Servos
 BANK_SERVO = 18
 VAULT_SERVO = 13
 
-GREEN_LED = 17
-RED_LED = 27
-YELLOW_LED = 26
+# LEDs
+BRANCH_LED = 26
+VAULT_LED = 27
 
-BUZZER = 6
 
-ADXL_ADDRESS = 0x53
-
-# ==================================================
-# 3. INITIALIZATION
-# ==================================================
+# =========================================================
+# 3. GPIO INITIALIZATION
+# =========================================================
 
 GPIO.setmode(GPIO.BCM)
 GPIO.setwarnings(False)
 
 GPIO.setup(TRIG, GPIO.OUT)
 GPIO.setup(ECHO, GPIO.IN)
+GPIO.output(TRIG, GPIO.LOW)
 
-GPIO.setup(PIR, GPIO.IN)
-GPIO.setup(MQ2, GPIO.IN)
+GPIO.setup(PIR_PIN, GPIO.IN)
+GPIO.setup(MQ2_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
-for pin in [GREEN_LED, RED_LED, YELLOW_LED, BUZZER]:
-    GPIO.setup(pin, GPIO.OUT)
-    GPIO.output(pin, GPIO.LOW)
+# LED initialization
+GPIO.setup(BRANCH_LED, GPIO.OUT)
+GPIO.setup(VAULT_LED, GPIO.OUT)
+GPIO.output(BRANCH_LED, GPIO.LOW)
+GPIO.output(VAULT_LED, GPIO.LOW)
 
 GPIO.setup(BANK_SERVO, GPIO.OUT)
 GPIO.setup(VAULT_SERVO, GPIO.OUT)
@@ -97,386 +110,554 @@ vault_pwm = GPIO.PWM(VAULT_SERVO, 50)
 bank_pwm.start(0)
 vault_pwm.start(0)
 
-# DHT11
+
+# =========================================================
+# 4. SENSOR INITIALIZATION
+# =========================================================
+
+# DHT11 on BCM GPIO4 (physical pin 7)
 try:
     dht = adafruit_dht.DHT11(board.D4)
-except Exception as e:
-    logger.warning(f"DHT11 init warning: {e}")
+    logging.info("DHT11 initialized")
+except Exception as exc:
+    logging.exception("DHT11 initialization failed: %s", exc)
     dht = None
 
-# ADXL345 I2C
+# ADXL345 on I2C bus 1, address 0x53
 try:
     bus = smbus.SMBus(1)
-    bus.write_byte_data(ADXL_ADDRESS, 0x2D, 0x08)
-except Exception as e:
-    logger.warning(f"ADXL345 I2C init warning: {e}")
+    device_id = bus.read_byte_data(ADXL_ADDRESS, 0x00)
+    if device_id != 0xE5:
+        raise RuntimeError(
+            f"Unexpected ADXL345 device ID: 0x{device_id:02X}; expected 0xE5"
+        )
+    bus.write_byte_data(ADXL_ADDRESS, 0x2D, 0x08)  # Measurement mode
+    logging.info("ADXL345 initialized")
+except Exception as exc:
+    logging.exception("ADXL345 initialization failed: %s", exc)
     bus = None
 
-# RFID
+# RC522 RFID
 try:
     reader = SimpleMFRC522()
-except Exception as e:
-    logger.warning(f"RC522 RFID init warning: {e}")
+    logging.info("RC522 RFID reader initialized")
+except Exception as exc:
+    logging.exception("RFID initialization failed: %s", exc)
     reader = None
 
-# Socket.IO Client
-sio = socketio.Client(reconnection=True, reconnection_delay=3, reconnection_delay_max=15)
 
-# ==================================================
-# 4. SYSTEM VARIABLES
-# ==================================================
+# =========================================================
+# 5. SOCKET.IO BACKEND CONNECTION
+# =========================================================
 
-bank_unlocked = False
-vault_unlocked = False
-
-bank_lock_time = 0
-vault_lock_time = 0
-
-last_rfid_time = 0
-last_rfid_uid = None
-
-temperature = None
-humidity = None
-distance = None
-
-pir_status = False
-mq2_status = False
-
-acc_x = 0.0
-acc_y = 0.0
-acc_z = 1.0
-
-vault_movement = False
-
-last_dht_read = 0
-last_adxl_read = 0
-last_stream_time = 0
-
-alert_message = "SYSTEM NORMAL"
-access_message = "Waiting for RFID card"
-
-# ==================================================
-# 5. ACTUATOR & SERVO FUNCTIONS
-# ==================================================
-
-def move_servo(pwm, position):
-    pwm.ChangeDutyCycle(position)
-    time.sleep(0.5)
-    pwm.ChangeDutyCycle(0)
-
-def unlock_bank():
-    global bank_unlocked, bank_lock_time
-    move_servo(bank_pwm, BANK_UNLOCK_POSITION)
-    bank_unlocked = True
-    bank_lock_time = time.time()
-    GPIO.output(GREEN_LED, GPIO.HIGH)
-    GPIO.output(RED_LED, GPIO.LOW)
-    emit_safe('pi:entrance_servo_state', {'state': 'UNLOCKED'})
-
-def lock_bank():
-    global bank_unlocked
-    move_servo(bank_pwm, BANK_LOCK_POSITION)
-    bank_unlocked = False
-    GPIO.output(GREEN_LED, GPIO.LOW)
-    GPIO.output(RED_LED, GPIO.HIGH)
-    emit_safe('pi:entrance_servo_state', {'state': 'LOCKED'})
-
-def unlock_vault():
-    global vault_unlocked
-    move_servo(vault_pwm, VAULT_UNLOCK_POSITION)
-    vault_unlocked = True
-    GPIO.output(YELLOW_LED, GPIO.HIGH)
-    emit_safe('pi:vault_servo_state', {'state': 'UNLOCKED'})
-
-def lock_vault():
-    global vault_unlocked
-    move_servo(vault_pwm, VAULT_LOCK_POSITION)
-    vault_unlocked = False
-    GPIO.output(YELLOW_LED, GPIO.LOW)
-    emit_safe('pi:vault_servo_state', {'state': 'LOCKED'})
-
-def alert_signal():
-    GPIO.output(RED_LED, GPIO.HIGH)
-
-def normal_signal():
-    if not bank_unlocked:
-        GPIO.output(RED_LED, GPIO.LOW)
-
-# ==================================================
-# 6. SENSOR READERS
-# ==================================================
-
-def read_ultrasonic():
-    GPIO.output(TRIG, False)
-    time.sleep(0.0002)
-
-    GPIO.output(TRIG, True)
-    time.sleep(0.00001)
-    GPIO.output(TRIG, False)
-
-    timeout = time.monotonic() + 0.03
-    while GPIO.input(ECHO) == 0:
-        if time.monotonic() > timeout:
-            return None
-
-    start = time.monotonic()
-    timeout = start + 0.03
-    while GPIO.input(ECHO) == 1:
-        if time.monotonic() > timeout:
-            return None
-
-    stop = time.monotonic()
-    return round((stop - start) * 17150, 2)
-
-def read_dht():
-    global temperature, humidity
-    if not dht:
-        return
-    try:
-        t = dht.temperature
-        h = dht.humidity
-        if t is not None and h is not None:
-            temperature = t
-            humidity = h
-            emit_safe('pi:dht11', {'temperature': float(temperature), 'humidity': float(humidity)})
-    except RuntimeError:
-        pass
-    except Exception:
-        pass
-
-def read_adxl():
-    global acc_x, acc_y, acc_z
-    if not bus:
-        return
-    try:
-        data = bus.read_i2c_block_data(ADXL_ADDRESS, 0x32, 6)
-        x = struct.unpack('<h', bytes(data[0:2]))[0]
-        y = struct.unpack('<h', bytes(data[2:4]))[0]
-        z = struct.unpack('<h', bytes(data[4:6]))[0]
-
-        acc_x = round(x * 0.0039, 2)
-        acc_y = round(y * 0.0039, 2)
-        acc_z = round(z * 0.0039, 2)
-    except Exception:
-        pass
-
-# ==================================================
-# 7. SOCKET.IO COMMUNICATION BRIDGE
-# ==================================================
+sio = socketio.Client(
+    reconnection=True,
+    reconnection_delay=3,
+    reconnection_delay_max=15
+)
 
 def emit_safe(event, data):
     if sio.connected:
         try:
             sio.emit(event, data)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.warning("Socket emit failed (%s): %s", event, exc)
 
 @sio.event
 def connect():
-    logger.info(f"[Socket] Connected to Backend at http://{BACKEND_HOST}:{BACKEND_PORT}")
-    sio.emit('pi:connect', {
-        'secret': BACKEND_SECRET,
-        'deviceId': DEVICE_ID
+    logging.info("Connected to backend: http://%s:%s", BACKEND_HOST, BACKEND_PORT)
+    sio.emit("pi:connect", {
+        "secret": BACKEND_SECRET,
+        "deviceId": DEVICE_ID
     })
+    # Synchronize initial door states with the website
+    emit_safe("pi:entrance_servo_state", {"state": "UNLOCKED" if bank_unlocked else "LOCKED"})
+    emit_safe("pi:vault_servo_state", {"state": "UNLOCKED" if vault_unlocked else "LOCKED"})
 
 @sio.event
 def disconnect():
-    logger.warning("[Socket] Disconnected from Backend.")
-
-@sio.on('cmd:entrance_servo')
-def on_entrance_cmd(data):
-    cmd = data.get('command')
-    logger.info(f"[Web Command] Entrance Servo: {cmd}")
-    if cmd == 'UNLOCK':
-        unlock_bank()
-    else:
-        lock_bank()
-
-@sio.on('cmd:vault_servo')
-def on_vault_cmd(data):
-    cmd = data.get('command')
-    logger.info(f"[Web Command] Vault Servo: {cmd}")
-    if cmd == 'UNLOCK':
-        unlock_vault()
-    else:
-        lock_vault()
+    logging.warning("Disconnected from backend")
 
 def start_socket_client():
     url = f"http://{BACKEND_HOST}:{BACKEND_PORT}"
     while True:
         if not sio.connected:
             try:
-                sio.connect(url, headers={'x-device-type': 'pi'}, wait_timeout=5)
+                sio.connect(
+                    url,
+                    headers={"x-device-type": "pi"},
+                    wait_timeout=5
+                )
                 sio.wait()
-            except Exception:
+            except Exception as exc:
+                logging.warning("Backend connection failed: %s", exc)
                 time.sleep(3)
         else:
             time.sleep(2)
 
-# ==================================================
-# 8. RFID PROCESSOR
-# ==================================================
+
+# =========================================================
+# 6. SYSTEM VARIABLES
+# =========================================================
+
+bank_unlocked = False
+vault_unlocked = False
+
+bank_unlock_time = 0.0
+vault_unlock_time = 0.0
+
+last_rfid_uid = None
+last_rfid_time = 0.0
+
+temperature = None
+humidity = None
+distance = None
+
+acc_x = 0.0
+acc_y = 0.0
+acc_z = 1.0
+vault_movement = False
+
+last_dht_read = 0.0
+last_adxl_read = 0.0
+last_ultrasonic_emit = 0.0
+last_heartbeat_emit = 0.0
+last_dashboard = 0.0
+program_start_time = time.time()
+last_pir_state = None
+mq2_status = False
+last_mq2_state = None
+last_mq2_read = 0.0
+pir_ready = False
+pir_motion_state = "WARMING_UP"
+
+access_message = "Waiting for RFID card"
+
+
+# =========================================================
+# 7. SERVO CONTROL
+# =========================================================
+
+def move_servo(pwm, duty):
+    """Move servo to a position, then stop sending pulses."""
+    pwm.ChangeDutyCycle(duty)
+    time.sleep(0.7)
+    pwm.ChangeDutyCycle(0)
+    time.sleep(0.1)
+
+
+def unlock_bank_servo():
+    global bank_unlocked, bank_unlock_time
+    logging.info("Unlocking bank entrance servo")
+    move_servo(bank_pwm, BANK_UNLOCK_POSITION)
+    bank_unlocked = True
+    bank_unlock_time = time.time()
+    emit_safe("pi:entrance_servo_state", {"state": "UNLOCKED"})
+
+
+def lock_bank_servo():
+    global bank_unlocked
+    logging.info("Locking bank entrance servo")
+    move_servo(bank_pwm, BANK_LOCK_POSITION)
+    bank_unlocked = False
+    emit_safe("pi:entrance_servo_state", {"state": "LOCKED"})
+
+
+def unlock_vault_servo():
+    global vault_unlocked, vault_unlock_time
+    logging.info("Vault gate opened from website")
+    move_servo(vault_pwm, VAULT_UNLOCK_POSITION)
+    vault_unlocked = True
+    vault_unlock_time = time.time()
+    emit_safe("pi:vault_servo_state", {"state": "UNLOCKED"})
+
+
+def lock_vault_servo():
+    global vault_unlocked
+    logging.info("Vault gate locked from website")
+    move_servo(vault_pwm, VAULT_LOCK_POSITION)
+    vault_unlocked = False
+    emit_safe("pi:vault_servo_state", {"state": "LOCKED"})
+
+
+def automatic_locking():
+    now = time.time()
+    # Bank entrance auto-locks after AUTO_LOCK_SECONDS (5s)
+    if bank_unlocked and now - bank_unlock_time >= AUTO_LOCK_SECONDS:
+        lock_bank_servo()
+
+
+# Commands from the website / backend
+@sio.on("cmd:entrance_servo")
+def on_entrance_command(data):
+    command = data.get("command", "").upper()
+    logging.info("Website entrance servo command: %s", command)
+
+    if command == "UNLOCK":
+        unlock_bank_servo()
+    elif command == "LOCK":
+        lock_bank_servo()
+
+
+@sio.on("cmd:vault_servo")
+def on_vault_command(data):
+    command = data.get("command", "").upper()
+    logging.info("Website vault servo command: %s", command)
+
+    if command == "UNLOCK":
+        unlock_vault_servo()
+    elif command == "LOCK":
+        lock_vault_servo()
+
+
+# =========================================================
+# 8. HC-SR04 ULTRASONIC SENSOR
+# =========================================================
+
+def read_ultrasonic():
+    GPIO.output(TRIG, GPIO.LOW)
+    time.sleep(0.0002)
+
+    GPIO.output(TRIG, GPIO.HIGH)
+    time.sleep(0.00001)
+    GPIO.output(TRIG, GPIO.LOW)
+
+    timeout = time.monotonic() + 0.04
+
+    while GPIO.input(ECHO) == 0:
+        if time.monotonic() > timeout:
+            return None
+
+    pulse_start = time.monotonic()
+    timeout = pulse_start + 0.04
+
+    while GPIO.input(ECHO) == 1:
+        if time.monotonic() > timeout:
+            return None
+
+    pulse_end = time.monotonic()
+    return round((pulse_end - pulse_start) * 17150, 2)
+
+
+# =========================================================
+# 9. DHT11 TEMPERATURE AND HUMIDITY
+# =========================================================
+
+def read_dht11():
+    global temperature, humidity
+
+    if dht is None:
+        return
+
+    try:
+        t = dht.temperature
+        h = dht.humidity
+
+        if t is not None and h is not None:
+            temperature = float(t)
+            humidity = float(h)
+
+            emit_safe("pi:dht11", {
+                "temperature": temperature,
+                "humidity": humidity
+            })
+
+    except RuntimeError:
+        # DHT11 occasionally returns a timing/checksum error.
+        pass
+    except Exception as exc:
+        logging.warning("DHT11 read error: %s", exc)
+
+
+# =========================================================
+# 10. ADXL345 ACCELEROMETER
+# =========================================================
+
+def read_adxl345():
+    global acc_x, acc_y, acc_z, vault_movement
+
+    if bus is None:
+        return
+
+    try:
+        data = bus.read_i2c_block_data(ADXL_ADDRESS, 0x32, 6)
+
+        x_raw = struct.unpack("<h", bytes(data[0:2]))[0]
+        y_raw = struct.unpack("<h", bytes(data[2:4]))[0]
+        z_raw = struct.unpack("<h", bytes(data[4:6]))[0]
+
+        # ADXL345 full-resolution scale: approximately 3.9 mg/LSB.
+        acc_x = round(x_raw * 0.0039, 2)
+        acc_y = round(y_raw * 0.0039, 2)
+        acc_z = round(z_raw * 0.0039, 2)
+
+        magnitude = math.sqrt(acc_x**2 + acc_y**2 + acc_z**2)
+        vault_movement = abs(magnitude - 1.0) > ACCEL_MOVEMENT_THRESHOLD
+
+    except Exception as exc:
+        logging.warning("ADXL345 read error: %s", exc)
+
+
+# =========================================================
+# 11. PIR MOTION SENSOR
+# =========================================================
+
+def read_pir():
+    """
+    Read PIR state and send updates when the state changes.
+    HC-SR501 modules need a stabilization period after power-on.
+    """
+    global last_pir_state, pir_ready, pir_motion_state
+
+    if time.time() - program_start_time < PIR_WARMUP_SECONDS:
+        pir_motion_state = "WARMING_UP"
+        return
+
+    pir_ready = True
+    current_state = GPIO.input(PIR_PIN)
+
+    if current_state != last_pir_state:
+        last_pir_state = current_state
+
+        if current_state:
+            pir_motion_state = "MOTION_DETECTED"
+            logging.info("PIR: Motion detected")
+            emit_safe("pi:pir", {"state": "MOTION_DETECTED"})
+        else:
+            pir_motion_state = "NO_MOTION"
+            logging.info("PIR: No motion")
+            emit_safe("pi:pir", {"state": "NO_MOTION"})
+
+
+# =========================================================
+# 12. MQ-2 SMOKE/GAS SENSOR (DIGITAL DO ONLY)
+# =========================================================
+
+def read_mq2():
+    """Read MQ-2 comparator output and send state to the backend.
+
+    DO is a digital threshold signal; it does not provide a real gas
+    concentration or analog ADC value.
+    """
+    global mq2_status, last_mq2_state, last_mq2_read
+
+    now = time.time()
+    if now - last_mq2_read < 0.5:
+        return
+    last_mq2_read = now
+
+    digital_value = GPIO.input(MQ2_PIN)
+    mq2_status = (digital_value == MQ2_ALARM_LEVEL)
+
+    # Send only when the digital detection state changes.
+    if mq2_status != last_mq2_state:
+        last_mq2_state = mq2_status
+        digital_state = "DETECTED" if mq2_status else "NORMAL"
+        logging.info("MQ-2: %s (DO=%s)", digital_state, digital_value)
+        emit_safe("pi:mq2", {"digitalState": digital_state})
+
+
+# =========================================================
+# 13. RFID CARD PROCESSING
+# =========================================================
 
 def process_rfid():
-    global access_message, last_rfid_time, last_rfid_uid
-    if not reader:
+    global access_message, last_rfid_uid, last_rfid_time
+
+    if reader is None:
         return
 
     try:
         uid = reader.read_id_no_block()
+
         if uid is None:
             return
 
-        uid = str(uid)
+        uid = str(uid).strip()
+
+        # Prevent repeated reads of the same card for 3 seconds.
         if uid == last_rfid_uid and time.time() - last_rfid_time < 3:
             return
 
         last_rfid_uid = uid
         last_rfid_time = time.time()
 
-        # Emit scan event to website
-        emit_safe('pi:rfid_scan', {'uid': uid})
+        logging.info("RFID card detected: %s", uid)
+        emit_safe("pi:rfid_scan", {"uid": uid})
 
-        if uid in MANAGER_UIDS:
-            # Manager scan: unlocks bank entrance. Vault must be opened manually from website.
-            access_message = f"MANAGER AUTHORIZED ({uid}) - BANK ACCESS (Use Website for Vault)"
-            unlock_bank()
-        elif uid in BANK_AUTHORIZED_UIDS:
-            # Employee scan: unlocks bank entrance
-            access_message = f"EMPLOYEE AUTHORIZED ({uid}) - BANK ACCESS"
-            unlock_bank()
+        if uid in AUTHORIZED_UIDS:
+            access_message = f"AUTHORIZED CARD: {uid} (Branch Gate Open)"
+            logging.info("Access granted: Opening Bank Branch gate only")
+            unlock_bank_servo()
         else:
-            access_message = f"UNAUTHORIZED CARD ({uid})"
-            alert_signal()
+            access_message = f"UNAUTHORIZED CARD: {uid}"
+            logging.warning("Access denied")
 
-    except Exception as e:
-        access_message = f"RFID ERROR: {e}"
+    except Exception as exc:
+        logging.warning("RFID read error: %s", exc)
+        access_message = f"RFID ERROR: {exc}"
 
-# ==================================================
-# 9. SENSOR MONITORING & DISPATCH
-# ==================================================
+
+# =========================================================
+# 14. SENSOR DATA TRANSMISSION
+# =========================================================
 
 def update_sensors():
-    global distance, pir_status, mq2_status, vault_movement, alert_message
-    global last_dht_read, last_adxl_read, last_stream_time
+    global distance
+    global last_dht_read, last_adxl_read, last_ultrasonic_emit, last_heartbeat_emit
 
-    pir_val = GPIO.input(PIR)
-    pir_status = bool(pir_val)
+    now = time.time()
 
-    mq2_val = GPIO.input(MQ2)
-    mq2_status = (mq2_val == MQ2_ALARM_LEVEL)
+    # Periodic heartbeat to keep website connection alive
+    if now - last_heartbeat_emit >= 5.0:
+        emit_safe("pi:heartbeat", {"timestamp": now})
+        last_heartbeat_emit = now
 
-    distance = read_ultrasonic()
+    # PIR and MQ-2: check digital inputs.
+    read_pir()
+    read_mq2()
 
-    if time.time() - last_dht_read >= 2.0:
-        read_dht()
-        last_dht_read = time.time()
+    # DHT11: read every 2 seconds.
+    if now - last_dht_read >= 2.0:
+        read_dht11()
+        last_dht_read = now
 
-    if time.time() - last_adxl_read >= 0.2:
-        read_adxl()
-        last_adxl_read = time.time()
+    # ADXL345: read every 0.2 seconds.
+    if now - last_adxl_read >= 0.2:
+        read_adxl345()
+        last_adxl_read = now
 
-    magnitude = math.sqrt(acc_x ** 2 + acc_y ** 2 + acc_z ** 2)
-    vault_movement = (abs(magnitude - 1.0) > ACCEL_MOVEMENT_THRESHOLD)
+    # HC-SR04: read and send approximately every 0.5 seconds.
+    if now - last_ultrasonic_emit >= 0.5:
+        distance = read_ultrasonic()
 
-    # Periodic continuous stream to backend website (every 0.5s)
-    if time.time() - last_stream_time >= 0.5:
-        emit_safe('pi:heartbeat', {'timestamp': time.time()})
-        emit_safe('pi:pir', {'state': 'MOTION_DETECTED' if pir_status else 'NO_MOTION'})
-        emit_safe('pi:mq2', {'rawAdc': 750 if mq2_status else 150, 'digitalState': 'DETECTED' if mq2_status else 'NORMAL'})
         if distance is not None:
-            emit_safe('pi:ultrasonic', {'distanceCm': distance})
-        emit_safe('pi:adxl335', {
-            'x': acc_x,
-            'y': acc_y,
-            'z': acc_z,
-            'movementState': 'POSSIBLE_TAMPERING' if vault_movement else 'STABLE'
-        })
-        last_stream_time = time.time()
+            emit_safe("pi:ultrasonic", {"distanceCm": distance})
 
-    # Alerts
-    alerts = []
-    if mq2_status:
-        alerts.append("SMOKE/GAS ALERT")
-    if pir_status:
-        alerts.append("MOTION DETECTED")
-    if vault_movement:
-        alerts.append("VAULT MOVEMENT DETECTED")
+        last_ultrasonic_emit = now
 
-    if alerts:
-        alert_message = " | ".join(alerts)
-        alert_signal()
-    else:
-        alert_message = "SYSTEM NORMAL"
-        normal_signal()
+    # Accelerometer update to the website.
+    emit_safe("pi:adxl335", {
+        "x": acc_x,
+        "y": acc_y,
+        "z": acc_z,
+        "movementState": "POSSIBLE_TAMPERING" if vault_movement else "STABLE"
+    })
 
-def automatic_locking():
-    # Only bank entrance auto-locks after AUTO_LOCK_SECONDS
-    if bank_unlocked and (time.time() - bank_lock_time >= AUTO_LOCK_SECONDS):
-        lock_bank()
-    # Vault does NOT auto-lock; it is manually controlled from the website (Request Unlock / Secure Vault)
+
+# =========================================================
+# 15. LED CONTROL
+# =========================================================
+
+def update_leds():
+    # GPIO26: branch-side alert (ultrasonic, gas/smoke, or temperature).
+    branch_alert = (
+        (distance is not None and 0 < distance < 30)
+        or mq2_status
+        or (temperature is not None and temperature > 45)
+    )
+
+    # GPIO27: vault-side alert (PIR motion or ADXL345 movement).
+    vault_alert = (
+        pir_motion_state == "MOTION_DETECTED"
+        or vault_movement
+    )
+
+    GPIO.output(BRANCH_LED, GPIO.HIGH if branch_alert else GPIO.LOW)
+    GPIO.output(VAULT_LED, GPIO.HIGH if vault_alert else GPIO.LOW)
+
+
+# =========================================================
+# 16. TERMINAL STATUS DISPLAY
+# =========================================================
 
 def display_dashboard():
-    os.system("clear")
-    print("=" * 65)
-    print("      IOT BANKGUARD SYSTEM - PI CONTROLLER & WEB BRIDGE")
-    print("=" * 65)
-    print(f"Backend Server    : http://{BACKEND_HOST}:{BACKEND_PORT}")
-    print(f"Socket Status     : {'CONNECTED' if sio.connected else 'DISCONNECTED / RETRYING'}")
-    print("-" * 65)
-    print("Temperature       :", f"{temperature} C" if temperature is not None else "--")
-    print("Humidity          :", f"{humidity} %" if humidity is not None else "--")
-    print("MQ2 Gas Alert     :", "YES (GAS DETECTED)" if mq2_status else "NO (NORMAL)")
-    print("PIR Motion        :", "DETECTED" if pir_status else "NO MOTION")
-    print("Ultrasonic        :", f"{distance} cm" if distance is not None else "NO ECHO")
-    print(f"ADXL345 (X, Y, Z) : ({acc_x}g, {acc_y}g, {acc_z}g)")
-    print("Vault Movement    :", "DETECTED" if vault_movement else "NORMAL")
-    print("-" * 65)
-    print("Bank Entrance Door:", "UNLOCKED" if bank_unlocked else "LOCKED")
-    print("Vault Door        :", "UNLOCKED" if vault_unlocked else "LOCKED")
-    print("Last RFID Event   :", access_message)
-    print("System Alert      :", alert_message)
-    print("=" * 65)
-    print("Press CTRL + C to stop.")
+    print("\033[2J\033[H", end="")
+    print("=" * 58)
+    print("          BANKGUARD - RASPBERRY PI CONTROLLER")
+    print("=" * 58)
+    print("Backend          :", f"http://{BACKEND_HOST}:{BACKEND_PORT}")
+    print("Socket           :", "CONNECTED" if sio.connected else "DISCONNECTED")
+    print("-" * 58)
 
-# ==================================================
-# 10. MAIN ENTRY POINT
-# ==================================================
+    print("Temperature      :", f"{temperature} C" if temperature is not None else "--")
+    print("Humidity         :", f"{humidity} %" if humidity is not None else "--")
+    print("Ultrasonic       :", f"{distance} cm" if distance is not None else "No echo")
+    print("PIR motion       :", pir_motion_state)
+    print("MQ-2 gas/smoke   :", "DETECTED" if mq2_status else "NORMAL")
+    print(f"ADXL345 X        : {acc_x} g")
+    print(f"ADXL345 Y        : {acc_y} g")
+    print(f"ADXL345 Z        : {acc_z} g")
+    print("Vault movement   :", "DETECTED" if vault_movement else "STABLE")
 
-if __name__ == '__main__':
+    print("-" * 58)
+    print("Entrance servo   :", "UNLOCKED" if bank_unlocked else "LOCKED")
+    print("Vault servo      :", "UNLOCKED (VAULT GATE OPEN)" if vault_unlocked else "LOCKED")
+    print("RFID status      :", access_message)
+    print("=" * 58)
+    print("Press CTRL+C to stop")
+
+
+# =========================================================
+# 17. MAIN PROGRAM
+# =========================================================
+
+if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s"
+    )
+
     try:
-        lock_bank()
-        lock_vault()
+        # Start with both servos in the locked position.
+        lock_bank_servo()
+        lock_vault_servo()
 
-        # Start WebSocket client in background daemon thread
-        socket_thread = threading.Thread(target=start_socket_client, daemon=True)
+        # Connect to the backend in a background thread.
+        socket_thread = threading.Thread(
+            target=start_socket_client,
+            daemon=True
+        )
         socket_thread.start()
 
-        print("Starting Bank Security System with Web Bridge...")
+        print("Starting BankGuard sensors and RFID access control...")
+        print("MQ-2 uses digital DO output only (no gas concentration reading).")
+        print(f"PIR sensor stabilization: {PIR_WARMUP_SECONDS} seconds")
         time.sleep(1)
 
         while True:
             update_sensors()
             process_rfid()
             automatic_locking()
+            update_leds()
             display_dashboard()
-            time.sleep(0.2)
+            time.sleep(0.1)
 
     except KeyboardInterrupt:
         print("\nStopping BankGuard...")
+
     finally:
-        GPIO.output(GREEN_LED, GPIO.LOW)
-        GPIO.output(RED_LED, GPIO.LOW)
-        GPIO.output(YELLOW_LED, GPIO.LOW)
-        GPIO.output(BUZZER, GPIO.LOW)
         try:
             bank_pwm.stop()
             vault_pwm.stop()
-            if dht:
+
+            GPIO.output(BRANCH_LED, GPIO.LOW)
+            GPIO.output(VAULT_LED, GPIO.LOW)
+
+            if dht is not None:
                 dht.exit()
-            if reader:
+
+            if reader is not None:
                 reader.READER.Close_MFRC522()
-        except Exception:
-            pass
+
+            if bus is not None:
+                bus.close()
+
+            if sio.connected:
+                sio.disconnect()
+
+        except Exception as exc:
+            logging.warning("Cleanup warning: %s", exc)
+
         GPIO.cleanup()
         print("BankGuard stopped safely.")

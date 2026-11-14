@@ -9,7 +9,6 @@ export default function Sidebar() {
     { path: '/overview', label: 'Overview', icon: '📊' },
     { path: '/bank-branch', label: 'Bank Branch', icon: '🏢' },
     { path: '/vault', label: 'Vault Monitoring', icon: '🔒' },
-    ...(isManager ? [{ path: '/employees', label: 'Employee Mgmt', icon: '👥' }] : []),
     { path: '/event-logs', label: 'Event Logs', icon: '📜' },
   ];
 
